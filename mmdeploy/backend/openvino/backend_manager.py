@@ -83,7 +83,7 @@ class OpenVINOManager(BaseBackendManager):
             'OpenVINO is not available, please install OpenVINO first.'
 
         from mmdeploy.apis.openvino import (get_input_info_from_cfg,
-                                            get_mo_options_from_cfg,
+                                            get_ovc_options_from_cfg,
                                             get_output_model_file)
         from mmdeploy.utils import get_ir_config
         from .onnx2openvino import from_onnx
@@ -93,9 +93,9 @@ class OpenVINOManager(BaseBackendManager):
             model_xml_path = get_output_model_file(onnx_path, work_dir)
             input_info = get_input_info_from_cfg(deploy_cfg)
             output_names = get_ir_config(deploy_cfg).output_names
-            mo_options = get_mo_options_from_cfg(deploy_cfg)
+            ovc_options = get_ovc_options_from_cfg(deploy_cfg)
             from_onnx(onnx_path, work_dir, input_info, output_names,
-                      mo_options)
+                      ovc_options)
             openvino_files.append(model_xml_path)
 
         return openvino_files
