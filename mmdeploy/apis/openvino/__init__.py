@@ -10,8 +10,8 @@ if is_available():
 
     from_onnx = PIPELINE_MANAGER.register_pipeline()(_from_onnx)
 
-    from .utils import get_input_info_from_cfg, get_mo_options_from_cfg
+    from .utils import get_input_info_from_cfg, get_ovc_options_from_cfg
     __all__ += [
         'from_onnx', 'get_output_model_file', 'get_input_info_from_cfg',
-        'get_mo_options_from_cfg'
+        'get_ovc_options_from_cfg'
     ]

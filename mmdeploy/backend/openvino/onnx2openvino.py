@@ -1,43 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os.path as osp
-import subprocess
 import tempfile
-from subprocess import PIPE, CalledProcessError, run
-from typing import Dict, Optional, Sequence, Union
+from typing import Optional, Sequence, Union
 
 import mmengine
 import onnx
+import openvino as ov
 
 from mmdeploy.utils import get_root_logger
-from .utils import ModelOptimizerOptions
-
-
-def get_mo_command() -> str:
-    """Checks for possible commands to run Model Optimizer. The following
-    commands will be tested:
-
-        'mo.py' - if you installed OpenVINO using the installer.
-        'mo' - if you installed OpenVINO with pip.
-
-    Returns:
-        str: Command to run Model Optimizer. If it is not available,
-            the empty string "" will be returned.
-    """
-    mo_command = ''
-    mo_commands = ['mo.py', 'mo']
-    for command in mo_commands:
-        is_available = True
-        try:
-            run(f'{command} -h',
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                shell=True,
-                check=True)
-        except CalledProcessError:
-            is_available = False
-        if is_available:
-            mo_command = command
-    return mo_command
 
 
 def get_output_model_file(onnx_path: str, work_dir: str) -> str:
@@ -56,11 +26,17 @@ def get_output_model_file(onnx_path: str, work_dir: str) -> str:
     return model_xml
 
 
+# Available options for model conversion
+ovc_base_options={'example_input', 'extension', 'verbose', 'compress_to_fp16'}
+preprocess_params = {'target_layout', 'source_layout', 'layout', 'mean_values', 'scale_values'}
+
+
 def from_onnx(onnx_model: Union[str, onnx.ModelProto],
               output_file_prefix: str,
-              input_info: Dict[str, Sequence[int]],
-              output_names: Sequence[str],
-              mo_options: Optional[ModelOptimizerOptions] = None):
+              input_info: Union[list, dict, str] = None,
+              output_names: Union[str, Sequence[str]] = None,
+              ovc_options: Optional[dict] = None):
+    
     """Convert ONNX to OpenVINO.
 
     Examples:
@@ -69,29 +45,37 @@ def from_onnx(onnx_model: Union[str, onnx.ModelProto],
         >>> output_names = ['dets', 'labels']
         >>> onnx_path = 'work_dir/end2end.onnx'
         >>> output_dir = 'work_dir'
-        >>> from_onnx( onnx_path, output_dir, input_info, output_names)
+        >>> from_onnx(onnx_path, output_dir, input_info, output_names)
 
     Args:
         onnx_model (str|ModelProto): The onnx model or its path.
         output_file_prefix (str): The path to the directory for saving
             the results.
-        input_info (Dict[str, Sequence[int]]):
-            The shape of each input.
-        output_names (Sequence[str]): Output names. Example:
-            ['dets', 'labels'].
-        mo_options (None | ModelOptimizerOptions): The class with
-            additional arguments for the Model Optimizer.
+        input_info (list|dict|str):
+            Information of model input required for model conversion.
+            Input can be set by a list of tuples or a dictionary. Each tuple can contain optionally input name (string),
+            input type (ov.Type, numpy.dtype) or input shape (ov.Shape, ov.PartialShape, list, tuple).
+            Example: input=("op_name", PartialShape([-1, 3, 100, 100]), ov.Type.f32).
+            Alternatively input can be set by a dictionary, where key - input name,
+            value - tuple with input parameters (shape or type).
+            Example 1: input={"op_name_1": ([1, 2, 3], ov.Type.f32), "op_name_2": ov.Type.i32}
+            Example 2: input=[("op_name_1", [1, 2, 3], ov.Type.f32), ("op_name_2", ov.Type.i32)]
+            Example 3: input=[([1, 2, 3], ov.Type.f32), ov.Type.i32]
+            The order of inputs in converted model will match the order of specified inputs.
+            If data type is not specified explicitly data type is taken from the original node data type.
+        output_names (str|Sequence[str]): Output names. Example:
+            'output' or ['dets', 'labels'].
+        ovc_options (dict): The dictionary with
+            additional arguments for the OpenVINO Model Conversion.
     """
-    work_dir = output_file_prefix
-    input_names = ','.join(input_info.keys())
-    input_shapes = ','.join(str(list(elem)) for elem in input_info.values())
-    output = ','.join(output_names)
 
-    mo_command = get_mo_command()
-    is_mo_available = bool(mo_command)
-    if not is_mo_available:
-        raise RuntimeError(
-            'OpenVINO Model Optimizer is not found or configured improperly')
+    if ovc_options is None:
+        ovc_options = {}
+    else:
+        unsupported_options = ovc_options.keys() - (ovc_base_options | preprocess_params)
+        assert len(unsupported_options) == 0, f"Unsupported options for OpenVINO model conversion: {unsupported_options}"
+
+    logger = get_root_logger()
 
     if isinstance(onnx_model, str):
         onnx_path = onnx_model
@@ -99,21 +83,35 @@ def from_onnx(onnx_model: Union[str, onnx.ModelProto],
         onnx_path = tempfile.NamedTemporaryFile(suffix='.onnx').name
         onnx.save(onnx_model, onnx_path)
 
-    mo_args = f'--input_model="{onnx_path}" '\
-              f'--output_dir="{work_dir}" ' \
-              f'--output="{output}" ' \
-              f'--input="{input_names}" ' \
-              f'--input_shape="{input_shapes}" '
-    if mo_options is not None:
-        mo_args += mo_options.get_options()
+    ovc_options['example_input'] = ovc_options.get('example_input')
+    ovc_options['extension'] = ovc_options.get('extension')
+    ovc_options['verbose'] = ovc_options.get('verbose') or False
+    ovc_options['compress_to_fp16'] = ovc_options.get('compress_to_fp16') or True
 
-    command = f'{mo_command} {mo_args}'
+    ov_model = ov.convert_model(onnx_path, input=input_info, output=output_names, example_input=ovc_options['example_input'], extension=ovc_options['extension'], verbose=ovc_options['verbose'])
+    model_xml = get_output_model_file(onnx_path, output_file_prefix)
 
-    logger = get_root_logger()
-    logger.info(f'Args for Model Optimizer: {command}')
-    mo_output = run(command, stdout=PIPE, stderr=PIPE, shell=True, check=True)
-    logger.info(mo_output.stdout.decode())
-    logger.debug(mo_output.stderr.decode())
+    if len(ovc_options.keys() & preprocess_params) > 0:
+        prep = ov.preprocess.PrePostProcessor(ov_model)
+        
+        if 'source_layout' in ovc_options.keys():
+            for input_name, layout in ovc_options['source_layout'].items():
+                prep.input(input_name).model().set_layout(ov.Layout(layout))
 
-    model_xml = get_output_model_file(onnx_path, work_dir)
+        if 'target_layout' in ovc_options.keys():
+            for input_name, layout in ovc_options['target_layout'].items():
+                prep.input(input_name).tensor().set_layout(ov.Layout(layout))
+
+        if 'mean_values' in ovc_options.keys():
+            for input_name, mean_val in ovc_options['mean_values'].items():
+                prep.input(input_name).preprocess().mean(mean_val)
+
+        if 'scale_values' in ovc_options.keys():
+            for input_name, scale_val in ovc_options['scale_values'].items():
+                prep.input(input_name).preprocess().scale(scale_val)
+
+        ov_model = prep.build()
+
+    ov.save_model(ov_model, model_xml, compress_to_fp16=ovc_options['compress_to_fp16'])
+
     logger.info(f'Successfully exported OpenVINO model: {model_xml}')

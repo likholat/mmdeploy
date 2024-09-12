@@ -3,7 +3,6 @@ from typing import Dict, List
 
 import mmengine
 
-from mmdeploy.backend.openvino import ModelOptimizerOptions
 from mmdeploy.utils import get_model_inputs
 from mmdeploy.utils.config_utils import get_backend_config, get_ir_config
 
@@ -53,8 +52,8 @@ def get_input_info_from_cfg(deploy_cfg: mmengine.Config) -> Dict[str, List]:
     return input_info
 
 
-def get_mo_options_from_cfg(
-        deploy_cfg: mmengine.Config) -> ModelOptimizerOptions:
+def get_ovc_options_from_cfg(
+        deploy_cfg: mmengine.Config) -> dict:
     """Get additional parameters for the Model Optimizer from the deploy
     config.
 
@@ -62,9 +61,8 @@ def get_mo_options_from_cfg(
         deploy_cfg (mmengine.Config): Deployment config.
 
     Returns:
-        ModelOptimizerOptions: A class that will contain additional arguments.
+        mmengine.config.config.ConfigDict: A dict that will contain additional arguments.
     """
     backend_config = get_backend_config(deploy_cfg)
-    mo_options = backend_config.get('mo_options', None)
-    mo_options = ModelOptimizerOptions(mo_options)
-    return mo_options
+    ovc_options = backend_config.get('ovc_options', None)
+    return ovc_options
